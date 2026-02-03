@@ -1,12 +1,228 @@
 <!doctype html>
 <html lang="de">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Mitglieder</title>
-  </head>
-  <body>
-    <h1>Hallo! Mitgliederseite ist online ✅</h1>
-    <p>Hier kommt später die Mitgliederübersicht rein.</p>
-  </body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mitglieder</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;background:#0b1220;color:#e8eefc}
+    .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
+    .card{background:#121b31;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px;margin:12px 0}
+    input,select,button{padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#0f1730;color:#e8eefc}
+    button{cursor:pointer}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+    img.avatar{width:72px;height:72px;border-radius:50%;object-fit:cover}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .muted{opacity:.8}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Verbindungsmitglieder</h1>
+  <div id="app"></div>
+</div>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+  // TODO: HIER eintragen
+  const SUPABASE_URL = "https://XXXX.supabase.co";
+  const SUPABASE_ANON_KEY = "XXXX";
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const app = document.getElementById("app");
+
+  function render(html){ app.innerHTML = html; }
+
+  async function getMyProfile(userId){
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  async function listProfiles(){
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  function loginView(){
+    render(`
+      <div class="card">
+        <h2>Login</h2>
+        <p class="muted">Einmal per E-Mail einloggen (Magic Link / Code). Danach Profil anlegen oder direkt zur Liste.</p>
+        <div class="row">
+          <input id="email" type="email" placeholder="deine@email.de" />
+          <button id="send">Login-Link senden</button>
+        </div>
+        <p id="msg" class="muted"></p>
+      </div>
+    `);
+
+    document.getElementById("send").onclick = async () => {
+      const email = document.getElementById("email").value.trim();
+      const msg = document.getElementById("msg");
+      msg.textContent = "";
+      if(!email) { msg.textContent = "Bitte E-Mail eingeben."; return; }
+
+      const { error } = await supabase.auth.signInWithOtp({ email });
+      msg.textContent = error ? ("Fehler: " + error.message) : "Check deine E-Mails (Login-Link / Code).";
+    };
+  }
+
+  function createProfileView(user){
+    render(`
+      <div class="card">
+        <h2>Charakter erstellen</h2>
+        <div class="row">
+          <input id="name" placeholder="Name" />
+          <input id="beer" placeholder="Biername" />
+          <input id="job" placeholder="Beruf" />
+          <input id="sem" placeholder="Beitrittssemester (z.B. WS 25/26)" />
+        </div>
+        <div class="row">
+          <input id="avatar" type="file" accept="image/*" />
+          <button id="save">Speichern</button>
+          <button id="logout">Logout</button>
+        </div>
+        <p id="msg" class="muted"></p>
+      </div>
+    `);
+
+    document.getElementById("logout").onclick = async () => { await supabase.auth.signOut(); loginView(); };
+
+    document.getElementById("save").onclick = async () => {
+      const msg = document.getElementById("msg");
+      msg.textContent = "";
+
+      const name = document.getElementById("name").value.trim();
+      const beer_name = document.getElementById("beer").value.trim();
+      const job = document.getElementById("job").value.trim();
+      const join_semester = document.getElementById("sem").value.trim();
+      const file = document.getElementById("avatar").files[0];
+
+      if(!name || !beer_name || !job || !join_semester){
+        msg.textContent = "Bitte alle Felder ausfüllen.";
+        return;
+      }
+
+      let avatar_url = null;
+
+      // Bild hochladen (optional)
+      if(file){
+        const ext = file.name.split(".").pop();
+        const path = `${user.id}/${Date.now()}.${ext}`;
+
+        const up = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
+        if (up.error) { msg.textContent = "Upload-Fehler: " + up.error.message; return; }
+
+        const pub = supabase.storage.from("avatars").getPublicUrl(path);
+        avatar_url = pub.data.publicUrl;
+      }
+
+      const { error } = await supabase.from("profiles").insert({
+        id: user.id,
+        name,
+        beer_name,
+        job,
+        join_semester,
+        avatar_url
+      });
+
+      msg.textContent = error ? ("Fehler: " + error.message) : "Gespeichert ✅";
+      if(!error) directoryView(user);
+    };
+  }
+
+  function directoryView(user){
+    render(`
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <div>
+            <h2 style="margin:0;">Mitgliederliste</h2>
+            <p class="muted" style="margin:6px 0 0;">Suche/Filter sind live.</p>
+          </div>
+          <div class="row">
+            <button id="logout">Logout</button>
+          </div>
+        </div>
+        <div class="row">
+          <input id="q" placeholder="Suchen (Name/Biername/Beruf)..." style="flex:1;min-width:220px"/>
+          <input id="fsem" placeholder="Filter Semester (z.B. WS 25/26)" />
+        </div>
+      </div>
+      <div id="list" class="grid"></div>
+    `);
+
+    document.getElementById("logout").onclick = async () => { await supabase.auth.signOut(); loginView(); };
+
+    const listEl = document.getElementById("list");
+    const qEl = document.getElementById("q");
+    const semEl = document.getElementById("fsem");
+
+    let all = [];
+
+    function renderList(){
+      const q = qEl.value.trim().toLowerCase();
+      const sem = semEl.value.trim().toLowerCase();
+
+      const filtered = all.filter(p => {
+        const hay = `${p.name} ${p.beer_name} ${p.job}`.toLowerCase();
+        const okQ = !q || hay.includes(q);
+        const okS = !sem || (p.join_semester || "").toLowerCase().includes(sem);
+        return okQ && okS;
+      });
+
+      listEl.innerHTML = filtered.map(p => `
+        <div class="card">
+          <div class="row">
+            <img class="avatar" src="${p.avatar_url || "https://via.placeholder.com/144"}" alt="">
+            <div>
+              <div style="font-weight:700;">${p.name}</div>
+              <div class="muted">„${p.beer_name}“</div>
+            </div>
+          </div>
+          <div class="muted" style="margin-top:10px;">${p.job}</div>
+          <div class="muted">Beitritt: ${p.join_semester}</div>
+        </div>
+      `).join("");
+    }
+
+    (async () => {
+      all = await listProfiles();
+      renderList();
+    })().catch(e => alert(e.message));
+
+    qEl.oninput = renderList;
+    semEl.oninput = renderList;
+  }
+
+  async function boot(){
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if(!session){
+      loginView();
+      return;
+    }
+
+    const user = session.user;
+    const profile = await getMyProfile(user.id);
+
+    if(!profile) createProfileView(user);
+    else directoryView(user);
+  }
+
+  // Reagiere auf Login/Logout
+  supabase.auth.onAuthStateChange(() => boot());
+
+  boot().catch(e => alert(e.message));
+</script>
+</body>
 </html>
