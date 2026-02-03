@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Mitglieder</title>
+  <title>Verbindungsmitglieder</title>
   <style>
     body{font-family:system-ui,Arial;margin:0;background:#0b1220;color:#e8eefc}
     .wrap{max-width:980px;margin:0 auto;padding:24px 16px}
@@ -14,6 +14,7 @@
     img.avatar{width:72px;height:72px;border-radius:50%;object-fit:cover}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     .muted{opacity:.8}
+    .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.08);font-size:12px}
   </style>
 </head>
 <body>
@@ -31,53 +32,83 @@
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   const app = document.getElementById("app");
+  const LS_KEY = "vm_selected_member_id";
 
   function render(html){ app.innerHTML = html; }
 
-  async function getMyProfile(userId){
+  async function listMembers(){
     const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .maybeSingle();
-    if (error) throw error;
-    return data;
-  }
-
-  async function listProfiles(){
-    const { data, error } = await supabase
-      .from("profiles")
+      .from("members")
       .select("*")
       .order("created_at", { ascending: false });
     if (error) throw error;
     return data ?? [];
   }
 
-  function loginView(){
+  async function createMember({name, beer_name, job, join_semester, avatar_url}){
+    const { data, error } = await supabase
+      .from("members")
+      .insert({ name, beer_name, job, join_semester, avatar_url })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  function startView(){
     render(`
       <div class="card">
-        <h2>Login</h2>
-        <p class="muted">Einmal per E-Mail einloggen (Magic Link / Code). Danach Profil anlegen oder direkt zur Liste.</p>
+        <h2>Willkommen</h2>
+        <p class="muted">Wähle dein Profil aus oder erstelle ein neues.</p>
         <div class="row">
-          <input id="email" type="email" placeholder="deine@email.de" />
-          <button id="send">Login-Link senden</button>
+          <button id="goPick">Ich bin schon in der Liste</button>
+          <button id="goCreate">Neuen Charakter erstellen</button>
+        </div>
+      </div>
+    `);
+
+    document.getElementById("goPick").onclick = pickView;
+    document.getElementById("goCreate").onclick = createView;
+  }
+
+  async function pickView(){
+    render(`
+      <div class="card">
+        <h2>Profil auswählen</h2>
+        <p class="muted">Wähle deinen Namen aus der Liste.</p>
+        <div class="row">
+          <select id="memberSelect" style="min-width:260px"></select>
+          <button id="continue">Weiter</button>
+          <button id="back">Zurück</button>
         </div>
         <p id="msg" class="muted"></p>
       </div>
     `);
 
-    document.getElementById("send").onclick = async () => {
-      const email = document.getElementById("email").value.trim();
-      const msg = document.getElementById("msg");
-      msg.textContent = "";
-      if(!email) { msg.textContent = "Bitte E-Mail eingeben."; return; }
+    document.getElementById("back").onclick = startView;
 
-      const { error } = await supabase.auth.signInWithOtp({ email });
-      msg.textContent = error ? ("Fehler: " + error.message) : "Check deine E-Mails (Login-Link / Code).";
-    };
+    const sel = document.getElementById("memberSelect");
+    const msg = document.getElementById("msg");
+
+    try {
+      const all = await listMembers();
+      if(all.length === 0){
+        msg.textContent = "Noch keine Mitglieder vorhanden. Bitte erstelle zuerst ein Profil.";
+        return;
+      }
+      sel.innerHTML = all.map(m => `<option value="${m.id}">${m.name} („${m.beer_name}“)</option>`).join("");
+
+      document.getElementById("continue").onclick = () => {
+        const id = sel.value;
+        localStorage.setItem(LS_KEY, id);
+        directoryView();
+      };
+    } catch(e){
+      msg.textContent = "Fehler: " + e.message;
+    }
   }
 
-  function createProfileView(user){
+  function createView(){
     render(`
       <div class="card">
         <h2>Charakter erstellen</h2>
@@ -90,13 +121,14 @@
         <div class="row">
           <input id="avatar" type="file" accept="image/*" />
           <button id="save">Speichern</button>
-          <button id="logout">Logout</button>
+          <button id="back">Zurück</button>
         </div>
         <p id="msg" class="muted"></p>
+        <p class="muted" style="font-size:12px;">Hinweis: “Login per Name” ist nur eine Auswahl, kein echter Schutz.</p>
       </div>
     `);
 
-    document.getElementById("logout").onclick = async () => { await supabase.auth.signOut(); loginView(); };
+    document.getElementById("back").onclick = startView;
 
     document.getElementById("save").onclick = async () => {
       const msg = document.getElementById("msg");
@@ -115,33 +147,23 @@
 
       let avatar_url = null;
 
-      // Bild hochladen (optional)
-      if(file){
-        const ext = file.name.split(".").pop();
-        const path = `${user.id}/${Date.now()}.${ext}`;
+      // Optional: Bild-Upload (nur wenn du später Insert + Upload erlaubst)
+      // Für super-einfach erstmal ohne Upload arbeiten:
+      // avatar_url bleibt null (wir zeigen dann Platzhalter)
 
-        const up = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
-        if (up.error) { msg.textContent = "Upload-Fehler: " + up.error.message; return; }
+      // Wenn du Upload willst, sag Bescheid: wir richten Storage-Policies passend ein.
 
-        const pub = supabase.storage.from("avatars").getPublicUrl(path);
-        avatar_url = pub.data.publicUrl;
+      try{
+        const created = await createMember({ name, beer_name, job, join_semester, avatar_url });
+        localStorage.setItem(LS_KEY, created.id);
+        directoryView();
+      } catch(e){
+        msg.textContent = "Fehler: " + e.message;
       }
-
-      const { error } = await supabase.from("profiles").insert({
-        id: user.id,
-        name,
-        beer_name,
-        job,
-        join_semester,
-        avatar_url
-      });
-
-      msg.textContent = error ? ("Fehler: " + error.message) : "Gespeichert ✅";
-      if(!error) directoryView(user);
     };
   }
 
-  function directoryView(user){
+  async function directoryView(){
     render(`
       <div class="card">
         <div class="row" style="justify-content:space-between;">
@@ -150,24 +172,39 @@
             <p class="muted" style="margin:6px 0 0;">Suche/Filter sind live.</p>
           </div>
           <div class="row">
-            <button id="logout">Logout</button>
+            <button id="switch">Profil wechseln</button>
           </div>
         </div>
         <div class="row">
           <input id="q" placeholder="Suchen (Name/Biername/Beruf)..." style="flex:1;min-width:220px"/>
           <input id="fsem" placeholder="Filter Semester (z.B. WS 25/26)" />
         </div>
+        <p class="muted" id="me"></p>
       </div>
       <div id="list" class="grid"></div>
     `);
 
-    document.getElementById("logout").onclick = async () => { await supabase.auth.signOut(); loginView(); };
+    document.getElementById("switch").onclick = () => {
+      localStorage.removeItem(LS_KEY);
+      startView();
+    };
 
+    const selectedId = localStorage.getItem(LS_KEY);
+    const meEl = document.getElementById("me");
     const listEl = document.getElementById("list");
     const qEl = document.getElementById("q");
     const semEl = document.getElementById("fsem");
 
     let all = [];
+    try{
+      all = await listMembers();
+    } catch(e){
+      meEl.textContent = "Fehler: " + e.message;
+      return;
+    }
+
+    const me = all.find(x => x.id === selectedId);
+    meEl.innerHTML = me ? `Angemeldet als: <span class="badge">${me.name} („${me.beer_name}“)</span>` : `Kein Profil ausgewählt.`;
 
     function renderList(){
       const q = qEl.value.trim().toLowerCase();
@@ -195,34 +232,17 @@
       `).join("");
     }
 
-    (async () => {
-      all = await listProfiles();
-      renderList();
-    })().catch(e => alert(e.message));
-
     qEl.oninput = renderList;
     semEl.oninput = renderList;
+    renderList();
   }
 
-  async function boot(){
-    const { data: { session } } = await supabase.auth.getSession();
-
-    if(!session){
-      loginView();
-      return;
-    }
-
-    const user = session.user;
-    const profile = await getMyProfile(user.id);
-
-    if(!profile) createProfileView(user);
-    else directoryView(user);
-  }
-
-  // Reagiere auf Login/Logout
-  supabase.auth.onAuthStateChange(() => boot());
-
-  boot().catch(e => alert(e.message));
+  // Boot
+  (async () => {
+    const selectedId = localStorage.getItem(LS_KEY);
+    if(selectedId) directoryView();
+    else startView();
+  })();
 </script>
 </body>
 </html>
